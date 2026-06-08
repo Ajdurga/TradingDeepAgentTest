@@ -7,9 +7,9 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_openai_functions_agent
+from langchain.agents import AgentExecutor, create_structured_chat_agent
 from langchain.tools import Tool
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -31,8 +31,8 @@ class DeepAgentHarness:
     
     def __init__(
         self,
-        openai_api_key: Optional[str] = None,
-        model: str = "gpt-4",
+        google_api_key: Optional[str] = None,
+        model: str = "gemini-pro",
         workspace_dir: str = "./workspace",
         skills_dir: str = "./skills",
         max_iterations: int = 20
@@ -41,16 +41,16 @@ class DeepAgentHarness:
         Initialize the Deep Agent Harness.
         
         Args:
-            openai_api_key: OpenAI API key
-            model: Model to use (gpt-4, gpt-3.5-turbo, etc.)
+            google_api_key: Google API key for Gemini
+            model: Model to use (gemini-pro, gemini-1.5-pro, etc.)
             workspace_dir: Workspace directory
             skills_dir: Skills directory
             max_iterations: Maximum agent iterations
         """
         # Get API key from env if not provided
-        self.api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = google_api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
-            raise ValueError("OpenAI API key not provided")
+            raise ValueError("Google API key not provided")
         
         self.model = model
         self.max_iterations = max_iterations
@@ -69,11 +69,12 @@ class DeepAgentHarness:
             broker_api_enabled=False
         )
         
-        # Initialize LLM
-        self.llm = ChatOpenAI(
+        # Initialize LLM with Gemini
+        self.llm = ChatGoogleGenerativeAI(
             model=model,
             temperature=0.1,
-            api_key=self.api_key
+            google_api_key=self.api_key,
+            convert_system_message_to_human=True
         )
         
         # Create agent tools
@@ -198,8 +199,8 @@ Current user preferences:
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
         
-        # Create agent
-        agent = create_openai_functions_agent(
+        # Create agent (using structured chat for Gemini compatibility)
+        agent = create_structured_chat_agent(
             llm=self.llm,
             tools=self.tools,
             prompt=prompt

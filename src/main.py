@@ -22,10 +22,10 @@ def main():
     load_dotenv()
     
     # Check for API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or api_key == "your_openai_api_key_here":
-        print("❌ Error: OPENAI_API_KEY not set in .env file")
-        print("Please add your OpenAI API key to the .env file")
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print("❌ Error: GOOGLE_API_KEY not set in .env file")
+        print("Please add your Google API key to the .env file")
         sys.exit(1)
     
     print("=" * 80)
@@ -34,9 +34,9 @@ def main():
     print()
     
     # Get configuration
-    model = os.getenv("OPENAI_MODEL", "gpt-4")
+    model = os.getenv("GEMINI_MODEL", "gemini-pro")
     
-    print(f"Model: {model}")
+    print(f"Model: Google {model}")
     print(f"Real Trading: ✅ Enabled (with mandatory approval gates)")
     print()
     
@@ -44,7 +44,7 @@ def main():
     print("Initializing agent...")
     try:
         agent = DeepAgentHarness(
-            openai_api_key=api_key,
+            google_api_key=api_key,
             model=model
         )
         print("✅ Agent initialized successfully")
