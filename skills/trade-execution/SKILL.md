@@ -1,37 +1,21 @@
 ---
 name: trade-execution
-description: Create and execute trade proposals (both paper and real trades). Supports paper trading for simulation and real trading with mandatory approval gates and safety limits. Use when the user wants to execute a trade or create a paper trade proposal.
+description: Create and execute real trade proposals with mandatory approval gates and safety limits. Use when the user wants to execute a trade, buy or sell stocks or options.
 ---
 
 # Trade Execution Skill
 
 ## Overview
 
-This skill enables the agent to create and execute trade proposals. It supports both paper trading (simulation) and real trading with comprehensive safety controls. All real trades require mandatory human approval and are subject to safety limits.
+This skill enables the agent to create and execute real trade proposals with comprehensive safety controls. All trades require mandatory human approval and are subject to safety limits.
 
 ## When to Use This Skill
 
 Activate this skill when the user:
 - Explicitly asks to execute a trade
-- Requests a paper trade simulation
 - Wants to buy or sell stocks or options
 - Asks to place an order
-- Wants to track a trade idea
-
-## Trade Types
-
-### Paper Trade (Simulation)
-- No real money involved
-- For learning and testing strategies
-- Tracked locally in workspace
-- No approval required (optional)
-
-### Real Trade (Live Execution)
-- Real money and real orders
-- **MANDATORY human approval required**
-- Subject to safety limits
-- Comprehensive logging and audit trail
-- Can be cancelled before execution
+- Requests trade execution
 
 ## Required Inputs
 
@@ -75,24 +59,6 @@ All real trades must pass these checks:
 
 ## Step-by-Step Procedure
 
-### For Paper Trades
-
-1. **Create Proposal**
-   - Generate unique proposal ID (PT-XXXX)
-   - Validate all parameters
-   - Calculate risk metrics
-
-2. **Save Proposal**
-   - Store in workspace/paper_trades.json
-   - Include timestamp and status
-   - Log to observations
-
-3. **Track Performance** (optional future feature)
-   - Monitor simulated P&L
-   - Compare to actual market
-
-### For Real Trades
-
 1. **Validate Prerequisites**
    - Verify risk analysis completed
    - Check safety limits
@@ -133,13 +99,6 @@ All real trades must pass these checks:
    - Provide feedback to user
 
 ## Tools This Skill May Call
-
-### Paper Trading Tools
-- `create_paper_trade_proposal`: Generate proposal
-- `write_workspace_file`: Save proposal
-- `read_workspace_file`: Read existing proposals
-
-### Real Trading Tools
 - `validate_trade_safety`: Check safety limits
 - `check_account_balance`: Verify sufficient funds
 - `request_human_approval`: Get user approval
@@ -156,25 +115,7 @@ All real trades must pass these checks:
 
 ## Output Format
 
-### Paper Trade
-```json
-{
-  "proposal_id": "PT-0001",
-  "trade_type": "paper",
-  "status": "saved",
-  "ticker": "AAPL",
-  "action": "buy",
-  "instrument_type": "stock",
-  "quantity": 10,
-  "order_type": "market",
-  "estimated_cost": 1755.00,
-  "rationale": "Uptrend with support at $175, moderate volatility",
-  "created_at": "2024-01-15T10:30:00Z",
-  "simulation_only": true
-}
-```
-
-### Real Trade (Pending Approval)
+### Trade Proposal (Pending Approval)
 ```json
 {
   "trade_id": "RT-0001",
@@ -211,7 +152,7 @@ All real trades must pass these checks:
 }
 ```
 
-### Real Trade (Executed)
+### Trade (Executed)
 ```json
 {
   "trade_id": "RT-0001",
@@ -237,8 +178,6 @@ All real trades must pass these checks:
 ```
 
 ## Approval Request Format
-
-### Real Trade Approval
 ```
 ⚠️  REAL TRADE APPROVAL REQUIRED ⚠️
 
@@ -274,7 +213,7 @@ Do you approve this trade? [YES/NO]
 
 ## Safety Constraints
 
-**MANDATORY for Real Trades:**
+**MANDATORY for All Trades:**
 - Human approval required for EVERY trade
 - Safety limits must pass
 - Sufficient funds verified
@@ -284,7 +223,7 @@ Do you approve this trade? [YES/NO]
 - No duplicate orders
 - Emergency stop available
 
-**MUST NOT (Real Trades):**
+**MUST NOT:**
 - Execute without approval
 - Bypass safety limits
 - Execute after approval expires
@@ -292,7 +231,7 @@ Do you approve this trade? [YES/NO]
 - Exceed position size limits
 - Ignore concentration risk
 
-**MUST (Real Trades):**
+**MUST:**
 - Log every trade attempt
 - Log approval/rejection
 - Log execution details
@@ -380,19 +319,6 @@ All real trades logged to `workspace/trade_audit.json`:
 ```
 
 ## Example Usage
-
-### Paper Trade
-**User:** "Create a paper trade for 10 shares of AAPL"
-
-**Agent:**
-1. Activate trade-execution skill
-2. Create paper trade proposal
-3. Save to workspace
-4. Confirm to user
-
-**Output:** "✓ Paper trade PT-0001 created for 10 shares of AAPL at ~$175.50"
-
-### Real Trade
 **User:** "Buy 1 AAPL call option, $180 strike, next month expiration"
 
 **Agent:**
@@ -421,5 +347,3 @@ User can configure in preferences:
 - `daily_loss_limit_percent`: Default 5.0%
 - `max_trade_value`: Default $10,000
 - `approval_timeout_minutes`: Default 5
-- `enable_paper_trading`: Default true
-- `enable_real_trading`: Default false (must explicitly enable)

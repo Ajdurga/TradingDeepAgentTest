@@ -1,83 +1,38 @@
 """
-Trade execution tools for paper trading and real trading with safety controls.
+Trade execution tools for real trading with safety controls.
 """
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 
-from src.models.schemas import (
-    PaperTradeProposal, ApprovalStatus, InstrumentType,
-    ApprovalRequest
-)
+from src.models.schemas import ApprovalRequest
 
 logger = logging.getLogger(__name__)
 
 
 class TradeExecutionTools:
-    """Tools for executing trades with safety controls."""
+    """Tools for executing real trades with safety controls."""
     
     def __init__(
         self,
-        enable_real_trading: bool = False,
         broker_api_enabled: bool = False
     ):
         """
         Initialize trade execution tools.
         
         Args:
-            enable_real_trading: Whether real trading is enabled
             broker_api_enabled: Whether broker API is configured
         """
-        self.enable_real_trading = enable_real_trading
         self.broker_api_enabled = broker_api_enabled
         self.pending_approvals: Dict[str, Dict[str, Any]] = {}
         
         logger.info(
             f"Trade execution tools initialized "
-            f"(real_trading={enable_real_trading}, broker_api={broker_api_enabled})"
+            f"(broker_api={broker_api_enabled})"
         )
     
-    def create_paper_trade_proposal(
-        self,
-        ticker: str,
-        instrument_type: str,
-        strategy: str,
-        rationale: str,
-        max_loss: float,
-        **kwargs
-    ) -> PaperTradeProposal:
-        """
-        Create a paper trade proposal.
-        
-        Args:
-            ticker: Stock ticker
-            instrument_type: 'stock' or 'option'
-            strategy: Strategy description
-            rationale: Trade rationale
-            max_loss: Maximum loss amount
-            **kwargs: Additional parameters
-            
-        Returns:
-            Paper trade proposal
-        """
-        proposal_id = f"PT-{uuid.uuid4().hex[:8].upper()}"
-        
-        proposal = PaperTradeProposal(
-            proposal_id=proposal_id,
-            status=ApprovalStatus.PENDING,
-            ticker=ticker.upper(),
-            instrument_type=InstrumentType(instrument_type),
-            strategy=strategy,
-            rationale=rationale,
-            max_loss=max_loss,
-            approval_required=False  # Paper trades don't require approval by default
-        )
-        
-        logger.info(f"Created paper trade proposal {proposal_id}")
-        return proposal
-    
-    def create_real_trade_proposal(
+    def create_trade_proposal(
         self,
         ticker: str,
         action: str,
@@ -108,9 +63,6 @@ class TradeExecutionTools:
         Returns:
             Trade proposal with safety checks
         """
-        if not self.enable_real_trading:
-            raise ValueError("Real trading is not enabled. Set enable_real_trading=True")
-        
         trade_id = f"RT-{uuid.uuid4().hex[:8].upper()}"
         
         # Extract additional parameters

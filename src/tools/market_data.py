@@ -11,19 +11,28 @@ from src.models.schemas import Quote, MarketDataOutput, DataSource
 
 logger = logging.getLogger(__name__)
 
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    logger.warning("yfinance not installed, using mock data only")
+
 
 class MarketDataTools:
     """Tools for fetching and analyzing market data."""
     
-    def __init__(self, use_mock: bool = True):
+    def __init__(self, use_mock: bool = False):
         """
         Initialize market data tools.
         
         Args:
-            use_mock: Whether to use mock data (True) or live API (False)
+            use_mock: Whether to use mock data (True) or Yahoo Finance (False)
         """
-        self.use_mock = use_mock
-        logger.info(f"Market data tools initialized (mock={use_mock})")
+        self.use_mock = use_mock or not YFINANCE_AVAILABLE
+        if not YFINANCE_AVAILABLE and not use_mock:
+            logger.warning("yfinance not available, falling back to mock data")
+        logger.info(f"Market data tools initialized (mock={self.use_mock})")
     
     def get_quote(self, ticker: str) -> Dict[str, Any]:
         """
@@ -38,8 +47,37 @@ class MarketDataTools:
         if self.use_mock:
             return self._get_mock_quote(ticker)
         else:
-            # TODO: Implement live API integration
-            logger.warning("Live API not implemented, using mock data")
+            return self._get_yfinance_quote(ticker)
+    
+    def _get_yfinance_quote(self, ticker: str) -> Dict[str, Any]:
+        """Get real quote data from Yahoo Finance."""
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            hist = stock.history(period="2d")
+            
+            if hist.empty:
+                logger.warning(f"No data for {ticker}, using mock")
+                return self._get_mock_quote(ticker)
+            
+            current_price = hist['Close'].iloc[-1]
+            previous_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+            change = current_price - previous_close
+            change_percent = (change / previous_close) * 100 if previous_close > 0 else 0
+            
+            return {
+                "ticker": ticker.upper(),
+                "current_price": round(float(current_price), 2),
+                "previous_close": round(float(previous_close), 2),
+                "change": round(float(change), 2),
+                "change_percent": round(float(change_percent), 2),
+                "volume": int(hist['Volume'].iloc[-1]) if 'Volume' in hist else 0,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data_source": "yahoo_finance"
+            }
+        except Exception as e:
+            logger.error(f"Error fetching Yahoo Finance data for {ticker}: {e}")
+            logger.warning("Falling back to mock data")
             return self._get_mock_quote(ticker)
     
     def _get_mock_quote(self, ticker: str) -> Dict[str, Any]:
@@ -78,8 +116,8 @@ class MarketDataTools:
         }
     
     def get_price_history(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         days: int = 90
     ) -> List[Dict[str, Any]]:
         """
@@ -95,7 +133,29 @@ class MarketDataTools:
         if self.use_mock:
             return self._get_mock_price_history(ticker, days)
         else:
-            logger.warning("Live API not implemented, using mock data")
+            return self._get_yfinance_history(ticker, days)
+    
+    def _get_yfinance_history(self, ticker: str, days: int) -> List[Dict[str, Any]]:
+        """Get historical price data from Yahoo Finance."""
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period=f"{days}d")
+            
+            if hist.empty:
+                logger.warning(f"No history for {ticker}, using mock")
+                return self._get_mock_price_history(ticker, days)
+            
+            history = []
+            for date, row in hist.iterrows():
+                history.append({
+                    "date": date.strftime("%Y-%m-%d"),
+                    "close": round(float(row['Close']), 2),
+                    "volume": int(row['Volume']) if 'Volume' in row else 0
+                })
+            
+            return history
+        except Exception as e:
+            logger.error(f"Error fetching Yahoo Finance history for {ticker}: {e}")
             return self._get_mock_price_history(ticker, days)
     
     def _get_mock_price_history(
