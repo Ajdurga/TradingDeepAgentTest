@@ -1,0 +1,49 @@
+# Core LangChain and AI
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.20
+openai==1.12.0
+
+# Data handling and validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Environment and configuration
+python-dotenv==1.0.0
+
+# HTTP and API
+httpx==0.26.0
+requests==2.31.0
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.3
+
+# Market data
+yfinance==0.2.36
+
+# Date/time handling
+python-dateutil==2.8.2
+
+# File handling
+PyYAML==6.0.1
+
+# Logging
+colorlog==6.8.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.23.3
+
+# Optional: FastAPI for web interface
+fastapi==0.109.0
+uvicorn==0.27.0
+python-multipart==0.0.6
+
+# Optional: MCP support (install separately if needed)
+# mcp - not available in PyPI, install from source if needed
+
+# Development tools
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0

@@ -1,1 +1,2 @@
 # TradingDeepAgentTest
+This project is a local Deep Agent demo that researches portfolio and options risk using reusable skills, memory, subagents, and optional Robinhood MCP integration afterward. The goal is to demonstrate production-style agentic AI concepts such as planning, tool execution, context management, safety gates, and evals. Plan is to use LangChain Deep Agents and Agent skills (skills.md) to build a full-stack trading agent.
