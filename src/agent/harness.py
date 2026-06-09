@@ -7,11 +7,18 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    ChatGoogleGenerativeAI = None  # type: ignore
+
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_structured_chat_agent
-from langchain.tools import Tool
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools import Tool, StructuredTool
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain import hub
 
 from src.agent.planner import Planner
 from src.agent.skill_registry import SkillRegistry
@@ -47,6 +54,13 @@ class DeepAgentHarness:
             skills_dir: Skills directory
             max_iterations: Maximum agent iterations
         """
+        # Check if Gemini is available
+        if not GEMINI_AVAILABLE:
+            raise ImportError(
+                "langchain-google-genai is not installed. "
+                "Please run: pip install langchain-google-genai google-generativeai"
+            )
+        
         # Get API key from env if not provided
         self.api_key = google_api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
@@ -70,12 +84,15 @@ class DeepAgentHarness:
         )
         
         # Initialize LLM with Gemini
-        self.llm = ChatGoogleGenerativeAI(
-            model=model,
-            temperature=0.1,
-            google_api_key=self.api_key,
-            convert_system_message_to_human=True
-        )
+        if ChatGoogleGenerativeAI is not None:
+            self.llm = ChatGoogleGenerativeAI(
+                model=model,
+                temperature=0.1,
+                google_api_key=self.api_key,
+                convert_system_message_to_human=True
+            )
+        else:
+            raise ImportError("ChatGoogleGenerativeAI not available")
         
         # Create agent tools
         self.tools = self._create_tools()
@@ -191,24 +208,44 @@ Current user preferences:
         user_prefs = self.memory_manager.get_user_preferences()
         prefs_str = f"Risk Tolerance: {user_prefs.risk_tolerance}, Max Position Risk: {user_prefs.max_position_risk_percent}%"
         
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt.format(skills=skills_desc, user_preferences=prefs_str)),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
+        # Get the default ReAct prompt and customize it
+        try:
+            react_prompt = hub.pull("hwchase17/react")
+        except:
+            # Fallback: create a simple ReAct prompt
+            from langchain.prompts import PromptTemplate
+            template = """Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought:{agent_scratchpad}"""
+            
+            react_prompt = PromptTemplate.from_template(template)
         
-        # Create agent (using structured chat for Gemini compatibility)
-        agent = create_structured_chat_agent(
+        # Create ReAct agent (compatible with Gemini)
+        agent = create_react_agent(
             llm=self.llm,
             tools=self.tools,
-            prompt=prompt
+            prompt=react_prompt
         )
         
         # Create executor
         executor = AgentExecutor(
-            agent=agent,
+            agent=agent,  # type: ignore
             tools=self.tools,
             verbose=True,
             max_iterations=self.max_iterations,
@@ -260,9 +297,10 @@ Current user preferences:
             final_output = result.get("output", "No output generated")
             
             # Mark plan as complete
-            for task in self.planner.current_plan.tasks:
-                if task.status != TaskStatus.COMPLETED:
-                    self.planner.mark_task_completed(task.id)
+            if self.planner.current_plan and self.planner.current_plan.tasks:
+                for task in self.planner.current_plan.tasks:
+                    if task.status != TaskStatus.COMPLETED:
+                        self.planner.mark_task_completed(task.id)
             
             # Save final report
             self.workspace.save_final_report(run_id, final_output)
@@ -271,7 +309,7 @@ Current user preferences:
             agent_result = AgentRunResult(
                 run_id=run_id,
                 user_prompt=user_prompt,
-                plan=self.planner.current_plan,
+                plan=self.planner.current_plan or plan,  # Use created plan if current_plan is None
                 skills_used=self._extract_skills_used(result),
                 tools_called=self._extract_tools_called(result),
                 final_report=final_output,
@@ -292,7 +330,7 @@ Current user preferences:
             agent_result = AgentRunResult(
                 run_id=run_id,
                 user_prompt=user_prompt,
-                plan=self.planner.current_plan,
+                plan=self.planner.current_plan or plan,  # Use created plan if current_plan is None
                 skills_used=[],
                 tools_called=[],
                 final_report=f"Error: {str(e)}",
