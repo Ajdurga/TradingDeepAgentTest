@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import logging
 import numpy as np
+import os
+import time
 
 from src.models.schemas import Quote, MarketDataOutput, DataSource
 
@@ -16,23 +18,42 @@ try:
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
-    logger.warning("yfinance not installed, using mock data only")
+    logger.warning("yfinance not installed")
+
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    logger.warning("requests not installed")
 
 
 class MarketDataTools:
     """Tools for fetching and analyzing market data."""
     
-    def __init__(self, use_mock: bool = False):
+    def __init__(self, use_mock: bool = False, alpha_vantage_key: Optional[str] = None):
         """
         Initialize market data tools.
         
         Args:
-            use_mock: Whether to use mock data (True) or Yahoo Finance (False)
+            use_mock: Whether to use mock data only
+            alpha_vantage_key: Alpha Vantage API key (optional, from env if not provided)
         """
-        self.use_mock = use_mock or not YFINANCE_AVAILABLE
-        if not YFINANCE_AVAILABLE and not use_mock:
-            logger.warning("yfinance not available, falling back to mock data")
-        logger.info(f"Market data tools initialized (mock={self.use_mock})")
+        self.use_mock = use_mock
+        self.alpha_vantage_key = alpha_vantage_key or os.getenv("ALPHA_VANTAGE_API_KEY")
+        self.yfinance_available = YFINANCE_AVAILABLE and not use_mock
+        self.alpha_vantage_available = REQUESTS_AVAILABLE and self.alpha_vantage_key and not use_mock
+        
+        # Track rate limit state
+        self.yfinance_rate_limited = False
+        self.last_yfinance_attempt = 0
+        
+        logger.info(
+            f"Market data tools initialized - "
+            f"yfinance: {self.yfinance_available}, "
+            f"alpha_vantage: {self.alpha_vantage_available}, "
+            f"mock: {self.use_mock}"
+        )
     
     def get_quote(self, ticker: str) -> Dict[str, Any]:
         """
@@ -42,28 +63,102 @@ class MarketDataTools:
             ticker: Stock ticker symbol
             
         Returns:
-            Quote data
+            Quote data with error information if data unavailable
         """
         if self.use_mock:
             return self._get_mock_quote(ticker)
-        else:
-            return self._get_yfinance_quote(ticker)
+        
+        # Try Alpha Vantage first (better rate limits)
+        if self.alpha_vantage_available:
+            try:
+                result = self._get_alpha_vantage_quote(ticker)
+                if result and "error" not in result:
+                    return result
+            except Exception as e:
+                logger.warning(f"Alpha Vantage failed for {ticker}: {e}")
+        
+        # Try yfinance if not rate limited
+        if self.yfinance_available and not self.yfinance_rate_limited:
+            result = self._get_yfinance_quote(ticker)
+            if result and "error" not in result:
+                return result
+        
+        # Return error response instead of mock data
+        return {
+            "ticker": ticker.upper(),
+            "error": "DATA_UNAVAILABLE",
+            "message": "Unable to fetch real-time data. yfinance may be rate-limited. Please try again later or configure Alpha Vantage API key.",
+            "timestamp": datetime.utcnow().isoformat(),
+            "data_source": "error"
+        }
+    
+    def _get_alpha_vantage_quote(self, ticker: str) -> Dict[str, Any]:
+        """Get quote data from Alpha Vantage API."""
+        if not self.alpha_vantage_key or not REQUESTS_AVAILABLE:
+            return {"error": "Alpha Vantage not configured"}
+        
+        try:
+            url = f"https://www.alphavantage.co/query"
+            params = {
+                "function": "GLOBAL_QUOTE",
+                "symbol": ticker,
+                "apikey": self.alpha_vantage_key
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "Global Quote" not in data or not data["Global Quote"]:
+                logger.warning(f"No data from Alpha Vantage for {ticker}")
+                return {"error": "No data available"}
+            
+            quote = data["Global Quote"]
+            current_price = float(quote.get("05. price", 0))
+            previous_close = float(quote.get("08. previous close", 0))
+            change = float(quote.get("09. change", 0))
+            change_percent = float(quote.get("10. change percent", "0").rstrip('%'))
+            volume = int(quote.get("06. volume", 0))
+            
+            return {
+                "ticker": ticker.upper(),
+                "current_price": round(current_price, 2),
+                "previous_close": round(previous_close, 2),
+                "change": round(change, 2),
+                "change_percent": round(change_percent, 2),
+                "volume": volume,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data_source": "alpha_vantage"
+            }
+        except Exception as e:
+            logger.error(f"Alpha Vantage error for {ticker}: {e}")
+            return {"error": str(e)}
     
     def _get_yfinance_quote(self, ticker: str) -> Dict[str, Any]:
         """Get real quote data from Yahoo Finance."""
+        if not YFINANCE_AVAILABLE:
+            return {"error": "yfinance not available"}
+        
+        # Check if we're rate limited (wait 60 seconds between attempts)
+        current_time = time.time()
+        if self.yfinance_rate_limited and (current_time - self.last_yfinance_attempt) < 60:
+            return {"error": "Rate limited"}
+        
         try:
             stock = yf.Ticker(ticker)
-            info = stock.info
             hist = stock.history(period="2d")
             
             if hist.empty:
-                logger.warning(f"No data for {ticker}, using mock")
-                return self._get_mock_quote(ticker)
+                logger.warning(f"No price data found for {ticker}")
+                return {"error": "No price data found, symbol may be delisted"}
             
             current_price = hist['Close'].iloc[-1]
             previous_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
             change = current_price - previous_close
             change_percent = (change / previous_close) * 100 if previous_close > 0 else 0
+            
+            # Reset rate limit flag on success
+            self.yfinance_rate_limited = False
             
             return {
                 "ticker": ticker.upper(),
@@ -76,9 +171,16 @@ class MarketDataTools:
                 "data_source": "yahoo_finance"
             }
         except Exception as e:
-            logger.error(f"Error fetching Yahoo Finance data for {ticker}: {e}")
-            logger.warning("Falling back to mock data")
-            return self._get_mock_quote(ticker)
+            error_str = str(e)
+            logger.error(f"Error fetching Yahoo Finance data for {ticker}: {error_str}")
+            
+            # Detect rate limiting
+            if "429" in error_str or "Too Many Requests" in error_str:
+                self.yfinance_rate_limited = True
+                self.last_yfinance_attempt = time.time()
+                logger.warning("yfinance rate limited - will retry after cooldown")
+            
+            return {"error": error_str}
     
     def _get_mock_quote(self, ticker: str) -> Dict[str, Any]:
         """Generate mock quote data."""
@@ -128,22 +230,33 @@ class MarketDataTools:
             days: Number of days of history
             
         Returns:
-            List of price data points
+            List of price data points or empty list if unavailable
         """
         if self.use_mock:
             return self._get_mock_price_history(ticker, days)
-        else:
-            return self._get_yfinance_history(ticker, days)
+        
+        # Try yfinance for historical data (Alpha Vantage free tier is limited)
+        if self.yfinance_available and not self.yfinance_rate_limited:
+            result = self._get_yfinance_history(ticker, days)
+            if result:
+                return result
+        
+        # Return empty list instead of mock data
+        logger.warning(f"Unable to fetch price history for {ticker}")
+        return []
     
     def _get_yfinance_history(self, ticker: str, days: int) -> List[Dict[str, Any]]:
         """Get historical price data from Yahoo Finance."""
+        if not YFINANCE_AVAILABLE:
+            return []
+        
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period=f"{days}d")
             
             if hist.empty:
-                logger.warning(f"No history for {ticker}, using mock")
-                return self._get_mock_price_history(ticker, days)
+                logger.warning(f"No history for {ticker}")
+                return []
             
             history = []
             for date, row in hist.iterrows():
@@ -155,8 +268,15 @@ class MarketDataTools:
             
             return history
         except Exception as e:
-            logger.error(f"Error fetching Yahoo Finance history for {ticker}: {e}")
-            return self._get_mock_price_history(ticker, days)
+            error_str = str(e)
+            logger.error(f"Error fetching Yahoo Finance history for {ticker}: {error_str}")
+            
+            # Detect rate limiting
+            if "429" in error_str or "Too Many Requests" in error_str:
+                self.yfinance_rate_limited = True
+                self.last_yfinance_attempt = time.time()
+            
+            return []
     
     def _get_mock_price_history(
         self, 
@@ -292,10 +412,10 @@ class MarketDataTools:
         return summary
     
     def get_market_data_analysis(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         lookback_days: int = 90
-    ) -> MarketDataOutput:
+    ) -> str:
         """
         Get complete market data analysis.
         
@@ -304,15 +424,24 @@ class MarketDataTools:
             lookback_days: Days of history to analyze
             
         Returns:
-            Market data output
+            Market data analysis as formatted string or error message
         """
         logger.info(f"Analyzing market data for {ticker}")
         
         # Get current quote
         quote = self.get_quote(ticker)
         
+        # Check if quote has error
+        if "error" in quote:
+            error_msg = quote.get("message", quote.get("error", "Unknown error"))
+            return f"❌ Unable to fetch data for {ticker}: {error_msg}"
+        
         # Get price history
         history = self.get_price_history(ticker, lookback_days)
+        
+        # Check if we have sufficient data
+        if not history or len(history) < 10:
+            return f"❌ Insufficient price history for {ticker}. Data may be unavailable due to API rate limits. Please try again later or configure Alpha Vantage API key in .env file."
         
         # Calculate metrics
         return_pct = self.calculate_returns(history)
@@ -331,23 +460,29 @@ class MarketDataTools:
         if high_52w - current < (high_52w - low_52w) * 0.2:
             support_resistance.append(f"Near 52-week high of ${high_52w:.2f}")
         
-        # Data quality notes
-        data_quality = [
-            f"Data current as of {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
-        ]
+        # Format output
+        data_source = quote.get("data_source", "unknown")
+        output = f"""📊 Market Data Analysis for {ticker}
+
+Current Price: ${current:.2f}
+Change: ${quote['change']:+.2f} ({quote['change_percent']:+.2f}%)
+Volume: {quote['volume']:,}
+
+{lookback_days}-Day Performance:
+• Return: {return_pct:+.2f}%
+• Annualized Volatility: {volatility:.2f}%
+• Trend: {trend}
+
+"""
+        if support_resistance:
+            output += "Key Levels:\n"
+            for note in support_resistance:
+                output += f"• {note}\n"
+            output += "\n"
         
-        if self.use_mock:
-            data_quality.append("Using mock data - live API not configured")
+        output += f"Data Source: {data_source}\n"
+        output += f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
         
-        return MarketDataOutput(
-            ticker=ticker.upper(),
-            current_price=quote["current_price"],
-            lookback_days=lookback_days,
-            return_percent=return_pct,
-            annualized_volatility=volatility,
-            trend_summary=trend,
-            support_resistance_notes=support_resistance,
-            data_quality_notes=data_quality
-        )
+        return output
 
 # Made with Bob
