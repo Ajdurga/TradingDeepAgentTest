@@ -109,9 +109,22 @@ class MarketDataTools:
             response.raise_for_status()
             data = response.json()
             
+            # Check for Alpha Vantage error responses
+            if "Error Message" in data:
+                logger.error(f"Alpha Vantage error: {data['Error Message']}")
+                return {"error": f"Alpha Vantage error: {data['Error Message']}"}
+            
+            if "Note" in data:
+                logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                return {"error": f"Alpha Vantage rate limit: {data['Note']}"}
+            
+            if "Information" in data:
+                logger.warning(f"Alpha Vantage info: {data['Information']}")
+                return {"error": f"Alpha Vantage info: {data['Information']}"}
+            
             if "Global Quote" not in data or not data["Global Quote"]:
-                logger.warning(f"No data from Alpha Vantage for {ticker}")
-                return {"error": "No data available"}
+                logger.warning(f"No Global Quote from Alpha Vantage for {ticker}. Raw response: {data}")
+                return {"error": f"No Global Quote returned. Raw response: {data}"}
             
             quote = data["Global Quote"]
             current_price = float(quote.get("05. price", 0))
@@ -133,6 +146,62 @@ class MarketDataTools:
         except Exception as e:
             logger.error(f"Alpha Vantage error for {ticker}: {e}")
             return {"error": str(e)}
+    
+    def _get_alpha_vantage_history(self, ticker: str, days: int) -> List[Dict[str, Any]]:
+        """Get historical price data from Alpha Vantage API."""
+        if not self.alpha_vantage_key or not REQUESTS_AVAILABLE:
+            return []
+        
+        try:
+            url = f"https://www.alphavantage.co/query"
+            # Use TIME_SERIES_DAILY for up to 100 days of data
+            params = {
+                "function": "TIME_SERIES_DAILY",
+                "symbol": ticker,
+                "apikey": self.alpha_vantage_key,
+                "outputsize": "compact" if days <= 100 else "full"
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Check for errors
+            if "Error Message" in data:
+                logger.error(f"Alpha Vantage error: {data['Error Message']}")
+                return []
+            
+            if "Note" in data:
+                logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                return []
+            
+            if "Information" in data:
+                logger.warning(f"Alpha Vantage info: {data['Information']}")
+                return []
+            
+            if "Time Series (Daily)" not in data:
+                logger.warning(f"No time series data from Alpha Vantage for {ticker}")
+                return []
+            
+            time_series = data["Time Series (Daily)"]
+            history = []
+            
+            # Convert to our format and limit to requested days
+            for date_str in sorted(time_series.keys(), reverse=True)[:days]:
+                day_data = time_series[date_str]
+                history.append({
+                    "date": date_str,
+                    "close": round(float(day_data["4. close"]), 2),
+                    "volume": int(day_data["5. volume"])
+                })
+            
+            # Reverse to get chronological order
+            history.reverse()
+            return history
+            
+        except Exception as e:
+            logger.error(f"Alpha Vantage history error for {ticker}: {e}")
+            return []
     
     def _get_yfinance_quote(self, ticker: str) -> Dict[str, Any]:
         """Get real quote data from Yahoo Finance."""
@@ -235,14 +304,22 @@ class MarketDataTools:
         if self.use_mock:
             return self._get_mock_price_history(ticker, days)
         
-        # Try yfinance for historical data (Alpha Vantage free tier is limited)
+        # Try Alpha Vantage first (better for daily data)
+        if self.alpha_vantage_available:
+            result = self._get_alpha_vantage_history(ticker, days)
+            if result:
+                logger.info(f"Got {len(result)} days of history from Alpha Vantage for {ticker}")
+                return result
+        
+        # Fallback to yfinance
         if self.yfinance_available and not self.yfinance_rate_limited:
             result = self._get_yfinance_history(ticker, days)
             if result:
+                logger.info(f"Got {len(result)} days of history from yfinance for {ticker}")
                 return result
         
         # Return empty list instead of mock data
-        logger.warning(f"Unable to fetch price history for {ticker}")
+        logger.warning(f"Unable to fetch price history for {ticker} from any source")
         return []
     
     def _get_yfinance_history(self, ticker: str, days: int) -> List[Dict[str, Any]]:
@@ -409,6 +486,39 @@ class MarketDataTools:
         summary += f"Total change: {total_change:+.1f}%. "
         summary += f"Range: ${low:.2f} - ${high:.2f}"
         
+    
+    def _normalize_ticker(self, ticker: Any) -> str:
+        """Normalize ticker input to uppercase string."""
+        if isinstance(ticker, dict):
+            ticker = ticker.get("ticker") or ticker.get("TICKER") or ticker.get("symbol")
+        return str(ticker).upper().strip()
+    
+    def get_current_price(self, ticker: str) -> str:
+        """
+        Get only the current stock price (quote-only, no historical analysis).
+        
+        Args:
+            ticker: Stock ticker symbol
+            
+        Returns:
+            Formatted current price string or error message
+        """
+        ticker = self._normalize_ticker(ticker)
+        logger.info(f"Fetching current price for {ticker}")
+        
+        quote = self.get_quote(ticker)
+        
+        if "error" in quote:
+            error_msg = quote.get("message", quote.get("error", "Unknown error"))
+            return f"❌ Unable to fetch current price for {ticker}: {error_msg}"
+        
+        return (
+            f"Current price for {ticker}: ${quote['current_price']:.2f}\n"
+            f"Change: {quote['change']:+.2f} ({quote['change_percent']:+.2f}%)\n"
+            f"Volume: {quote['volume']:,}\n"
+            f"Source: {quote.get('data_source', 'unknown')}\n"
+            f"Timestamp: {quote['timestamp']}"
+        )
         return summary
     
     def get_market_data_analysis(

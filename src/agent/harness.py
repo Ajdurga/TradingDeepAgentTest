@@ -108,11 +108,18 @@ class DeepAgentHarness:
         """Create LangChain tools from our tool classes."""
         tools = []
         
-        # Market data tools
+        # Market data tools - quote only (for simple price questions)
         tools.append(Tool(
-            name="get_market_data",
+            name="get_current_stock_price",
+            func=lambda ticker: self.market_data_tools.get_current_price(ticker),
+            description="Get ONLY the current/latest stock price for a ticker. Use this for simple 'what is the price' questions. Fast and lightweight."
+        ))
+        
+        # Market data tools - full analysis (for volatility, trend, history)
+        tools.append(Tool(
+            name="get_market_data_analysis",
             func=lambda ticker: self.market_data_tools.get_market_data_analysis(ticker),
-            description="Get market data analysis for a stock ticker including price, volatility, and trend"
+            description="Get FULL market data analysis including 90-day history, volatility, and trend. Use this when user asks about volatility, trend, or historical performance. Requires more API calls."
         ))
         
         # Options tools
